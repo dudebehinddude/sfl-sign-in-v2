@@ -1,0 +1,156 @@
+from django.shortcuts import render, redirect
+from django.contrib.auth.decorators import permission_required, user_passes_test
+from django.http import HttpResponse, JsonResponse
+from django.contrib.sessions.models import Session
+from django.utils import timezone
+from django.contrib.auth import get_user_model
+from django.utils.timezone import now, timedelta, localtime
+from django.db.models.functions import TruncDate
+from django.db.models import Count, Avg, ExpressionWrapper, Q, F, DurationField, Sum
+
+
+from users.models import KeyholderHistory
+from visit_tracking.models import Visit
+from tools_and_trainings.models import Training, TrainingCategory
+
+#Checks whether users are staff based on space level
+def staff_required(view_func):
+    return user_passes_test(lambda u: u.space_level >= get_user_model().SpaceLevel.KEYHOLDER)(view_func)
+
+#checks whether users are allowed to open the space based on space level
+def open_required(view_func):
+    return user_passes_test(lambda u: u.space_level >= get_user_model().SpaceLevel.VOLUNTEER)(view_func)
+
+
+def index(request):
+    context ={
+        #defines the context of whether a user can open based on space level and checks the user is not anonymous
+        'user_can_open_space': not request.user.is_anonymous and request.user.space_level >= get_user_model().SpaceLevel.VOLUNTEER,
+        #defines the context of whether a user can train others based on whether the user has a training level greater than or equal to trainer
+        'user_can_train': not request.user.is_anonymous and Training.objects.filter(user=request.user, training_level__gte=Training.TrainingLevels.TRAINER).exists(),
+
+    }
+    #renders the index.html page with the above context
+    return render(request, 'index.html', context)
+
+#renders the profile.html page and grabs the information required to fill it out
+def profile(request):
+    visits = Visit.objects.filter(user__niner_id=request.user.niner_id).order_by('-enter_time')
+        
+    last_week_hours, total_hours = request.user.get_hours()
+    
+    context = {
+        'all_time_visits':visits,
+        'total_hours':total_hours,
+        'last_week_hours':last_week_hours
+    }
+    
+    return render(request, 'profile.html', context)
+
+#renders the coming soon page
+def coming_soon(request):
+    return render(request, 'coming_soon.html')
+
+#grabs the highest amount of unique visitors and renders the stats page
+def stats(request):
+    visits_by_day = (
+        Visit.objects
+        .annotate(day=TruncDate("enter_time"))
+        .values("day")
+        .annotate(unique_visitors=Count("user", distinct=True)) 
+        .order_by("-unique_visitors")
+    )
+    
+    if visits_by_day.exists():
+        busiest = visits_by_day.first()
+    else:
+        busiest = None
+    
+    context = {
+        'highest_unique': busiest
+    }
+    return render(request, 'stats.html', context)
+#adds to the stats page with a users per day, average length of stay, total time in the lab, and average visits per user chart
+def users_per_day_chart(request):
+    visits_by_day = (
+        Visit.objects
+        .annotate(day=TruncDate("enter_time"))
+        .values("day")
+        .annotate(
+            unique_visitors=Count("user", distinct=True),
+            visit_count=Count("id"),
+            avg_visit_length=Avg(
+                ExpressionWrapper(
+                    F("exit_time") - F("enter_time"),
+                    output_field=DurationField()
+                ),
+                filter=Q(forgot_to_signout=False) | Q(forgot_to_signout__isnull=True)
+            ),
+            total_time=Sum(
+                ExpressionWrapper(
+                    F("exit_time") - F("enter_time"),
+                    output_field=DurationField()
+                ),
+                filter=Q(forgot_to_signout=False) | Q(forgot_to_signout__isnull=True)
+
+            )
+        )
+        .order_by("day")
+    )
+    
+    recorded_data = {
+        entry["day"]: {"users": entry["unique_visitors"],
+                        "visits": entry["visit_count"],
+                        "avg_length": entry["avg_visit_length"],
+                        "total_time": entry["total_time"],
+                        "avg_visits_per_user": (entry["visit_count"] / entry["unique_visitors"]) if entry["unique_visitors"] else 0
+
+        } for entry in visits_by_day}
+    
+    start_date = min(recorded_data.keys())
+    end_date = now().date()
+    full_date_range = [start_date + timedelta(days=i) for i in range((end_date - start_date).days + 1)]
+    
+    complete_data = {
+        date: {
+            "users": recorded_data.get(date, {}).get("users", 0),
+            "avg_length": recorded_data.get(date, {}).get("avg_length", None),
+            "total_time": recorded_data.get(date, {}).get("total_time", None),
+            "avg_visits_per_user": recorded_data.get(date, {}).get("avg_visits_per_user", 0)
+
+        }
+        for date in full_date_range
+    }
+
+    data = {
+        "labels": [date.strftime("%a %Y-%m-%d") for date in complete_data.keys()],
+        "values": [entry["users"] for entry in complete_data.values()],
+        "avg_lengths": [(entry["avg_length"].total_seconds() / 3600) if entry["avg_length"] else 0 for entry in complete_data.values()],
+        "total_time": [(entry["total_time"].total_seconds() / 3600) if entry["total_time"] else 0 for entry in complete_data.values()],
+        "avg_visits_per_user": [entry["avg_visits_per_user"] for entry in complete_data.values()],
+
+    }
+    
+    return JsonResponse(data)
+
+#Requires the space to be open and if it is renders active_users, the keyholder, and all trainings using the users_in_space template
+@open_required
+def users_in_space(request):
+    current_keyholder = KeyholderHistory.objects.get_current_keyholder()
+
+    users_from_activity_logs = get_user_model().objects.filter(visit__still_in_the_space=True).distinct()
+
+    active_users = []
+
+    for user in users_from_activity_logs:
+        active_users.append({"user": user, "method": "in_person", "trainings": Training.objects.get_users_trainings(user)})
+    context = {
+        "active_users": active_users, 
+        "keyholder": current_keyholder,
+        "all_trainings": TrainingCategory.objects.all().distinct(),
+    }
+
+    return render(request, "users_in_space.html", context)
+
+
+

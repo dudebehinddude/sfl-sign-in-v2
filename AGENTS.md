@@ -1,0 +1,3 @@
+# SFL Sign In 2.0
+
+Read docs/project-context.md and docs/architecture-council-draft.md before work. User requirements override generic style suggestions. All architecture/schema choices provisional until user review. No production access, push, PR, merge or deployment. Never read .env or credentials from other projects. Use assigned path ownership; no nested agents unless expressly tasked. pnpm frontend, FastAPI/SQLModel/PostgreSQL backend, env-only configuration, no public database port/tunnel. Preserve legacy keyholder semantics with minimum priority -1. Every task reports checks and limitations honestly.

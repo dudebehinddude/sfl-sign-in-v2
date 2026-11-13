@@ -1,0 +1,11 @@
+services:
+  web:
+    build:
+      target: development
+    environment:
+      SFL_DEV_BACKEND: http://api:8000
+    volumes:
+      - ./frontend/src:/app/frontend/src
+      - ./frontend/public:/app/frontend/public:ro
+      - ./frontend/index.html:/app/frontend/index.html:ro
+      - ./frontend/vite.config.ts:/app/frontend/vite.config.ts:ro

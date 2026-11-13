@@ -1,0 +1,137 @@
+{% extends 'base.html' %}
+
+{% block title %}SFL - Current Users{% endblock %}
+
+{% block content %}
+
+    <div class="container">
+        <h1 class="title is-3">Active Users</h1>
+
+        <div class="columns">
+            <div class="column is-four-fifths">
+                <table id="activeUsersTable" class="table is-striped is-hoverable is-fullwidth">
+                    <thead>
+                        <tr>    
+                            <th>User</th>
+                            <th>Trainings</th>
+                            <th>Quick Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for user in active_users %}
+                            <tr data-method="{{ user.method }}" data-trainings="{% for training in user.trainings %}{{ training.category.name }} {% endfor %}">>
+                                <td>{{ user.user }}</td>
+                                <td>
+                                    <div class="field is-grouped is-grouped-multiline">
+                                    {% for training in user.trainings%}
+                                    <div class="control">
+                                        <div class="tags has-addons">
+                                            <span class="tag" style="background-color: {{ training.hex_color }}"> {{ training.category.name_readable }} </span>
+                                            <span class="tag">
+                                                <span class="icon">
+                                                    <i class="fas {{ training.icon }}"></i>
+                                                </span>
+                                            </span>
+                                        </div>
+                                    </div>
+                                    {% endfor%}
+                                    </div>
+                                </td>
+                                <td>
+                                    <div class="buttons">
+                                    {% if user.method == "in_person" and user.user.niner_id != keyholder.keyholder.niner_id %}
+                                           
+                                        <form method="POST", action="/station/set_forgot/" style="display:block;">
+                                            {% csrf_token %}
+                                            <input type="hidden" id="barcodeId" name="barcode" value="{{user.user.niner_id}}"/>
+                                            <input type="hidden" id="redirectId" name="redirect" value="{% url 'user_list' %}"/>
+
+                                            <input type="submit" class="button is-warning" value="Set Forgot"> 
+                                        </form>                          
+                                    {% endif %}
+                                    
+                                    {% if not user.user.canvas_id %}
+                                        <form method="POST", action="/users/{{user.user.niner_id}}/update_canvas_id" style="display:block;">
+                                            {% csrf_token %}
+                                            <input type="hidden" id="redirectId" name="redirect" value="{% url 'user_list' %}"/>
+                                            <input type="submit" class="button" value="Update Canvas Status"> 
+                                        </form>     
+                                    {% endif %}
+
+                                    </div>
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+        
+            </div>
+            <div class="column is-one-fifth">
+                <div class="box">
+                    <div class="field">
+                        <label class="label">Filter by Training</label>
+                        <div class="buttons filter" id="trainingFilters">
+                            <style>
+                                .filter input[type="radio"] {
+                                    display: none;
+                                  }
+                            </style>
+                            <label class="button is-primary is-selected">
+                                <input type="radio" name="trainingFilter" value="all" checked>
+                                All Trainings
+                            </label>
+                            {% for training in all_trainings %}
+                            <label class="button">
+                                <input type="radio" name="trainingFilter" value="{{ training.name }}">
+                                {{ training.name_readable }}
+                            </label>
+                            {% endfor %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+
+    </div>
+
+    <!-- Initialize DataTables for sorting, searching, and pagination -->
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            $('#activeUsersTable').DataTable();
+            
+            const tableRows = document.querySelectorAll("#activeUsersTable tbody tr");
+            const trainingRadios = document.querySelectorAll('input[name="trainingFilter"]');
+            const allRadios = [...trainingRadios];
+
+            function applyFilters() {
+                const selectedTraining = document.querySelector('input[name="trainingFilter"]:checked').value;
+                
+                tableRows.forEach(row => {
+                    const rowTrainings = row.getAttribute("data-trainings").split(" ");
+                    
+                    const trainingMatch = selectedTraining === "all" || rowTrainings.includes(selectedTraining);
+                    
+                    row.style.display = trainingMatch ? "" : "none";
+                });
+            }
+
+            allRadios.forEach(radio => {
+                radio.addEventListener("change", () => {
+                    document.querySelectorAll('.button').forEach(label => {
+                        label.classList.remove('is-selected');
+                        label.classList.remove('is-primary');
+                    });
+                    
+                    const selectedLabel = radio.closest('label');
+                    selectedLabel.classList.add('is-selected');
+                    selectedLabel.classList.add('is-primary');
+                    
+                    applyFilters();
+                });
+            });
+        });
+
+    </script>
+
+{% endblock %}

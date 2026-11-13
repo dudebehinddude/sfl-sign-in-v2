@@ -1,0 +1,108 @@
+name: sfl-${APP_PORT:-8080}
+
+x-app-environment: &app-environment
+  DATABASE_URL: ${SFL_DATABASE_URL:?Use scripts/compose.py with an explicit env file}
+  APP_ENV: ${APP_ENV:-development}
+  APP_PORT: ${APP_PORT:-8080}
+  PUBLIC_ORIGIN: ${APP_SCHEME:-http}://${APP_HOST:-localhost}:${APP_PORT:-8080}
+  COOKIE_SECURE: ${COOKIE_SECURE:-false}
+  LAB_TIMEZONE: ${LAB_TIMEZONE:-America/New_York}
+  CANVAS_BASE_URL: ${CANVAS_BASE_URL:-https://instructure.charlotte.edu}
+  CANVAS_API_TOKEN: ${CANVAS_API_TOKEN:-}
+  CANVAS_COURSE_ID: ${CANVAS_COURSE_ID:-}
+  CANVAS_SYNC_INTERVAL_SECONDS: ${CANVAS_SYNC_INTERVAL_SECONDS:-3600}
+  S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+  S3_BUCKET: ${S3_BUCKET:-sfl-avatars}
+  S3_ACCESS_KEY: ${MINIO_ROOT_USER:-sfl-admin}
+  S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in your env file}
+  S3_REGION: ${S3_REGION:-us-east-1}
+  SQL_STATEMENT_TIMEOUT_MS: ${SQL_STATEMENT_TIMEOUT_MS:-5000}
+  SQL_MAX_ROWS: ${SQL_MAX_ROWS:-1000}
+  SMTP_HOST: ${SMTP_HOST:-}
+  SMTP_PORT: ${SMTP_PORT:-587}
+  SMTP_USERNAME: ${SMTP_USERNAME:-}
+  SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+  SMTP_FROM: ${SMTP_FROM:-}
+  SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
+  CANVAS_ENROLLMENT_URL: ${CANVAS_ENROLLMENT_URL:-}
+  SQL_READ_DATABASE_URL: ${SQL_READ_DATABASE_URL:-}
+  SQL_WRITE_DATABASE_URL: ${SQL_WRITE_DATABASE_URL:-}
+
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-sfl}
+      POSTGRES_USER: ${POSTGRES_USER:-sfl}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in your env file}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  minio:
+    # Requested full management console, before its community removal in May 2025.
+    build:
+      context: .
+      dockerfile: infra/minio.Dockerfile
+    command: [server, /data, --console-address, ':9001']
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-sfl-admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in your env file}
+    volumes:
+      - object_data:/data
+    healthcheck:
+      test: [CMD, curl, -f, http://localhost:9000/minio/health/live]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: infra/backend.Dockerfile
+    environment: *app-environment
+    command: [uvicorn, app.main:app, --host, 0.0.0.0, --port, '8000', --proxy-headers, --forwarded-allow-ips, '*']
+    depends_on:
+      db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    expose: ['8000']
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: infra/backend.Dockerfile
+    environment: *app-environment
+    command: [python, -m, app.worker]
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: infra/frontend.Dockerfile
+    ports:
+      - '${APP_BIND_ADDRESS:-127.0.0.1}:${APP_PORT:-8080}:8080'
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  object_data:
